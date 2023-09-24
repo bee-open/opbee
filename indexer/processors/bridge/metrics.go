@@ -153,11 +153,10 @@ func (m *bridgeMetrics) RecordInterval() func(error) {
 	m.intervalTick.Inc()
 	timer := prometheus.NewTimer(m.intervalDuration)
 	return func(err error) {
+		timer.ObserveDuration()
 		if err != nil {
 			m.intervalFailures.Inc()
 		}
-
-		timer.ObserveDuration()
 	}
 }
 

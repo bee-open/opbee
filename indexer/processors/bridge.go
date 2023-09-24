@@ -63,14 +63,6 @@ func NewBridgeProcessor(log log.Logger, db *database.DB, metrics bridge.Metricer
 func (b *BridgeProcessor) Start(ctx context.Context) error {
 	done := ctx.Done()
 
-	// In order to ensure all seen bridge finalization events correspond with seen
-	// bridge initiated events, we establish a shared marker between L1 and L2 when
-	// processing events.
-	//
-	// As L1 and L2 blocks are indexed, the highest indexed L2 block starting a new
-	// sequencing epoch and corresponding L1 origin that has also been indexed
-	// serves as this shared marker.
-
 	// Fire off independently on startup to check for
 	// new data or if we've indexed new L1 data.
 	l1EtlUpdates := b.l1Etl.Notify()
@@ -94,6 +86,10 @@ func (b *BridgeProcessor) Start(ctx context.Context) error {
 	}
 }
 
+// Runs the processing loop. In order to ensure all seen bridge finalization events
+// can be correlated with bridge initiated events, we establish a shared marker between
+// L1 and L2 when processing events. The lastest shared indexed time (epochs) between
+// L1 and L2 serves as this shared marker.
 func (b *BridgeProcessor) run() error {
 	// In the event where we have a large number of un-observed epochs, we cap the search
 	// of epochs by 10k. If this turns out to be a bottleneck, we can parallelize the processing

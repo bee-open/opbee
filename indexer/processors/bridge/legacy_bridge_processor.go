@@ -310,8 +310,8 @@ func LegacyL1ProcessFinalizedBridgeEvents(log log.Logger, db *database.DB, metri
 	}
 
 	// (2) L2StandardBridge -- no-op for now as there's nothing actionable to do here besides
-	// santiy checks which is not important for legacy code. The message status is already tracked
-	// via the relayed bridge messed through the cross domain messenger.
+	// santiy checks which is not important for legacy code. Not worth extra code pre-bedrock.
+	// The message status is already tracked via the relayed bridge messed through the cross domain messenger.
 	//  - NOTE: This means we dont increment metrics for finalized bridge transfers
 
 	// a-ok!
@@ -352,8 +352,8 @@ func LegacyL2ProcessFinalizedBridgeEvents(log log.Logger, db *database.DB, metri
 	}
 
 	// (2) L2StandardBridge -- no-op for now as there's nothing actionable to do here besides
-	// santiy checks which is not important for legacy code. The message status is already tracked
-	// via the relayed bridge messed through the cross domain messenger.
+	// santiy checks which is not important for legacy code. Not worth the extra code pre-bedorck.
+	// The message status is already tracked via the relayed bridge messed through the cross domain messenger.
 	//  - NOTE: This means we dont increment metrics for finalized bridge transfers
 
 	// a-ok!
