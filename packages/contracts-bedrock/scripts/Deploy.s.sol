@@ -34,6 +34,7 @@ import { L1ERC721Bridge } from "src/L1/L1ERC721Bridge.sol";
 import { ProtocolVersions, ProtocolVersion } from "src/L1/ProtocolVersions.sol";
 import { Predeploys } from "src/libraries/Predeploys.sol";
 import { Chains } from "./Chains.sol";
+import { Types } from "src/libraries/Types.sol";
 
 import { IBigStepper } from "src/dispute/interfaces/IBigStepper.sol";
 import { IPreimageOracle } from "src/cannon/interfaces/IPreimageOracle.sol";
@@ -66,8 +67,21 @@ contract Deploy is Deployer {
 
     /// @notice Deploy all of the L1 contracts
     function run() public {
-        console.log("Deploying L1 system");
+        console.log("Deploying a fresh OP Stack including SuperchainConfig");
+        address supConf = setupSuperchainConfig();
+        setupOpChain(supConf);
+    }
 
+    /// @notice Deploy a full system with a new SuperchainConfig
+    function setupSuperchainConfig() public returns (address supConf_) {
+        supConf_ = deploySuperchainConfigProxy();
+        deploySuperchainConfig();
+        initializeSuperchainConfig();
+    }
+
+    /// @notice Deploy a new OP Chain, with an existing SuperchainConfig provided
+    function setupOpChain(address supConf) public {
+        console.log("Deploying an Opchain only");
         deployProxies();
         deployImplementations();
 
@@ -120,6 +134,16 @@ contract Deploy is Deployer {
         ) {
             _;
         }
+    }
+
+    function deploySuperchainConfigProxy() public broadcast returns (address addr_) {
+        Proxy proxy = new Proxy({
+            _admin: msg.sender
+        });
+
+        save("SuperchainConfigProxy", address(proxy));
+        console.log("SuperchainConfigProxy deployed at %s", address(proxy));
+        addr_ = address(proxy);
     }
 
     /// @notice Deploy all of the proxies
@@ -328,6 +352,19 @@ contract Deploy is Deployer {
         addr_ = address(proxy);
     }
 
+    function deploySuperchainConfig() public broadcast {
+        SuperchainConfig superchainConfig = new SuperchainConfig{ salt: implSalt() }();
+
+        require(superchainConfig.systemOwner() == address(0));
+        require(superchainConfig.initiator() == address(0));
+        require(superchainConfig.vetoer() == address(0));
+        require(superchainConfig.guardian() == address(0));
+        require(superchainConfig.delay() == 0);
+
+        save("SuperchainConfig", address(superchainConfig));
+        console.log("SuperchainConfig deployed at %s", address(superchainConfig));
+    }
+
     /// @notice Deploy the L1CrossDomainMessenger
     function deployL1CrossDomainMessenger() public broadcast returns (address addr_) {
         L1CrossDomainMessenger messenger = new L1CrossDomainMessenger{ salt: implSalt() }();
@@ -349,9 +386,8 @@ contract Deploy is Deployer {
         OptimismPortal portal = new OptimismPortal{ salt: implSalt() }();
 
         require(address(portal.L2_ORACLE()) == address(0));
-        require(portal.guardian() == address(0));
         require(address(portal.SYSTEM_CONFIG()) == address(0));
-        require(portal.paused() == true);
+        require(address(portal.superchainConfig()) == address(0));
 
         save("OptimismPortal", address(portal));
         console.log("OptimismPortal deployed at %s", address(portal));
@@ -534,6 +570,36 @@ contract Deploy is Deployer {
         console.log("DisputeGameFactory version: %s", version);
     }
 
+    function initializeSuperchainConfig() public broadcast {
+        address payable superchainConfigProxy = mustGetAddress("SuperchainConfigProxy");
+        address superchainConfig = mustGetAddress("SuperchainConfig");
+
+        bytes32 batcherHash = bytes32(uint256(uint160(cfg.batchSenderAddress())));
+
+        // todo(maurelian): Add a new config type for this
+        Types.SequencerKeys memory sequencer = Types.SequencerKeys({ batcherHash: batcherHash, unsafeBlockSigner: cfg.p2pSequencerAddress()});
+        Types.SequencerKeys[] memory sequencers = new Types.SequencerKeys[](1);
+        sequencers[0] = sequencer;
+
+        Proxy(superchainConfigProxy).upgradeToAndCall({
+            _implementation: superchainConfig,
+            _data: abi.encodeCall(
+                SuperchainConfig.initialize,
+                (
+                    cfg.finalSystemOwner(), // todo(maurelian): Update to a DelayedVetoable contract
+                    // todo(maurelian): the zero values below will be defined when DelayedVetoable is added to the deploy scripts.
+                    // This is dependent on running the initialization steps via a Safe, because it is not possible
+                    // to transfer the ownership of DelayedVetoable.
+                    address(0), // initiator
+                    address(0), // vetoer
+                    cfg.portalGuardian(),
+                    0, // delay
+                    sequencers
+                )
+                )
+        });
+    }
+
     /// @notice Initialize the SystemConfig
     function initializeSystemConfig() public broadcast {
         ProxyAdmin proxyAdmin = ProxyAdmin(mustGetAddress("ProxyAdmin"));
@@ -550,7 +616,7 @@ contract Deploy is Deployer {
                 SystemConfig.initialize,
                 (
                     cfg.finalSystemOwner(),
-                    SuperchainConfig(address(0)), // todo(maurelian): add to deploy scripts
+                    SuperchainConfig(mustGetAddress("SuperchainConfigProxy")),
                     cfg.gasPriceOracleOverhead(),
                     cfg.gasPriceOracleScalar(),
                     batcherHash,
@@ -715,6 +781,7 @@ contract Deploy is Deployer {
 
         require(address(messenger.PORTAL()) == optimismPortalProxy);
         require(address(messenger.portal()) == optimismPortalProxy);
+
         bytes32 xdmSenderSlot = vm.load(address(messenger), bytes32(uint256(204)));
         require(address(uint160(uint256(xdmSenderSlot))) == Constants.DEFAULT_L2_SENDER);
     }
@@ -764,7 +831,11 @@ contract Deploy is Deployer {
         address optimismPortal = mustGetAddress("OptimismPortal");
         address l2OutputOracleProxy = mustGetAddress("L2OutputOracleProxy");
         address systemConfigProxy = mustGetAddress("SystemConfigProxy");
+        address superchainConfigProxy = mustGetAddress("SuperchainConfigProxy");
+        console.log("superchainConfigProxy");
+        console.log(superchainConfigProxy);
 
+        // todo(maurelian): rename this config value
         address guardian = cfg.portalGuardian();
         if (guardian.code.length == 0) {
             console.log("Portal guardian has no code: %s", guardian);
@@ -775,7 +846,8 @@ contract Deploy is Deployer {
             _implementation: optimismPortal,
             _data: abi.encodeCall(
                 OptimismPortal.initialize,
-                (L2OutputOracle(l2OutputOracleProxy), SystemConfig(systemConfigProxy), SuperchainConfig(address(0)))
+                // todo use real impl
+                (L2OutputOracle(l2OutputOracleProxy), SystemConfig(systemConfigProxy), SuperchainConfig(superchainConfigProxy))
                 )
         });
 
@@ -784,9 +856,14 @@ contract Deploy is Deployer {
         console.log("OptimismPortal version: %s", version);
 
         require(address(portal.L2_ORACLE()) == l2OutputOracleProxy);
+        require(address(portal.superchainConfig()) == superchainConfigProxy);
         require(portal.guardian() == cfg.portalGuardian());
         require(address(portal.SYSTEM_CONFIG()) == systemConfigProxy);
         require(portal.paused() == false);
+
+        // Now that the Portal is initialized we can also check this value in the Messenger
+        address messenger = mustGetAddress("L1CrossDomainMessengerProxy");
+        require(L1CrossDomainMessenger(messenger).paused() == false);
     }
 
     function initializeProtocolVersions() public onlyTestnetOrDevnet broadcast {
